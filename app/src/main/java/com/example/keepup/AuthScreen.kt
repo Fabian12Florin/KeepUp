@@ -100,8 +100,12 @@ fun AuthScreen(navController: NavController) {
         // Buton pentru autentificare cu Google
         Button(
             onClick = {
-                val signInIntent = googleSignInClient.signInIntent
-                googleSignInLauncher.launch(signInIntent)
+                googleSignInClient.signOut().addOnCompleteListener {
+                    googleSignInClient.revokeAccess().addOnCompleteListener {
+                        val signInIntent = googleSignInClient.signInIntent
+                        googleSignInLauncher.launch(signInIntent)
+                    }
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) {

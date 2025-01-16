@@ -1,3 +1,5 @@
+package com.example.keepup
+
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -9,6 +11,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,47 +24,100 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.navigation.NavController
 import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.*
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
-fun RunningDetailsScreen() {
+fun RunningDetailsScreen(navController: NavController) {
     val context = LocalContext.current
-    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    val locationManager = remember {
+        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    }
+    val sensorManager = remember {
+        context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    }
     val coroutineScope = rememberCoroutineScope()
 
     var userLocation by remember { mutableStateOf<LatLng?>(null) }
-    val cameraPositionState = rememberCameraPositionState()
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(userLocation ?: LatLng(45.0, 25.0), 15f) // Setează un zoom de 15f
+    }
+    val path = remember { mutableStateListOf<LatLng>() }
 
     var isRunning by remember { mutableStateOf(false) }
-    var elapsedTime by remember { mutableStateOf(0L) } // Stochează timpul trecut într-o variabilă
-
-    var totalDistance by remember { mutableStateOf(0.0) } // Stochează distanța parcursă
+    var elapsedTime by remember { mutableStateOf(0L) }
+    var totalDistance by remember { mutableStateOf(0.0) }
     var previousLocation by remember { mutableStateOf<Location?>(null) }
 
+    var realTimeSpeed by remember { mutableStateOf(0.0f) }  // speed in m/s
+    var averageSpeed by remember { mutableStateOf(0.0) }    // speed in km/h
     var compassRotation by remember { mutableStateOf(0f) }
 
-    // Launcher pentru cererea permisiunii de locație
+    // Points placeholder
+    val currentPoints by remember { mutableStateOf(50) }
+
+    // Instantiate FirestoreRepository (no Room)
+    val firestoreRepository = FirestoreRepository()
+
+    // Permission launcher for GPS
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { isGranted ->
             if (!isGranted) {
-                Toast.makeText(context, "Location permission is needed for this feature", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Location permission is required.", Toast.LENGTH_LONG).show()
+            } else {
+                requestLocationUpdates(context, locationManager, cameraPositionState, coroutineScope) { location ->
+                    userLocation = location
+                }
             }
         }
     )
 
-    // Listener pentru senzorul de orientare
+    // Handle End Workout Button
+    val onEndWorkout: () -> Unit = {
+        isRunning = false
+
+        val workoutType = "Running"
+        val formattedTime = formatElapsedTime(elapsedTime)
+        val currentDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val roundedDistance = String.format("%.2f", totalDistance).toDouble()
+        val roundedAvgSpeed = averageSpeed.roundToInt()
+
+        firestoreRepository.saveWorkout(
+            type = workoutType,
+            elapsedTime = formattedTime,
+            distance = roundedDistance.toDouble(),
+            avgSpeed = roundedAvgSpeed.toDouble(),
+            points = currentPoints,
+            path = path.map { SimpleLatLng(it.latitude, it.longitude) }, // Conversie către SimpleLatLng
+            onSuccess = { workoutId ->
+                Log.d("Firestore", "Workout saved successfully with ID: $workoutId")
+                navController.navigate("workoutDetails/$workoutId")
+            }
+        ) { exception ->
+            Log.e("Firestore", "Failed to save workout: ${exception.message}")
+        }
+    }
+
+    // Compass sensor listener
     val sensorEventListener = remember {
         object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
@@ -69,60 +125,12 @@ fun RunningDetailsScreen() {
                     compassRotation = event.values[0]
                 }
             }
-
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
     }
 
-    LaunchedEffect(isRunning) {
-        if (isRunning) {
-            while (isRunning) {
-                delay(1000L) // Incrementare la fiecare secundă
-                elapsedTime += 1
-            }
-        }
-    }
-
+    // Register compass listener
     LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            getLastKnownLocation(locationManager) { location ->
-                if (location != null) {
-                    val latLng = LatLng(location.latitude, location.longitude)
-                    userLocation = latLng
-                    coroutineScope.launch {
-                        cameraPositionState.animate(
-                            CameraUpdateFactory.newLatLngZoom(latLng, 15f)
-                        )
-                    }
-                }
-            }
-            startLocationUpdates(locationManager) { location ->
-                if (location != null) {
-                    val latLng = LatLng(location.latitude, location.longitude)
-                    userLocation = latLng
-
-                    // Calcularea distanței parcursă
-                    previousLocation?.let { prevLocation ->
-                        totalDistance += prevLocation.distanceTo(location) / 1000.0 // Conversie la km
-                    }
-                    previousLocation = location
-
-                    coroutineScope.launch {
-                        cameraPositionState.animate(
-                            CameraUpdateFactory.newLatLngZoom(latLng, 15f)
-                        )
-                    }
-                }
-            }
-        } else {
-            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-
-        // Înregistrează listener-ul pentru senzorul de orientare
         sensorManager.registerListener(
             sensorEventListener,
             sensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION),
@@ -132,165 +140,346 @@ fun RunningDetailsScreen() {
 
     DisposableEffect(Unit) {
         onDispose {
-            // Dezactivează listener-ul pentru senzorul de orientare
             sensorManager.unregisterListener(sensorEventListener)
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            // Harta într-un card
+    // Update camera when user location changes
+    LaunchedEffect(userLocation) {
+        userLocation?.let { location ->
+            coroutineScope.launch {
+                cameraPositionState.animate(CameraUpdateFactory.newLatLng(location))
+            }
+        }
+    }
+
+    // Increment time and compute avg speed when running
+    LaunchedEffect(isRunning) {
+        if (isRunning) {
+            while (isRunning) {
+                delay(1000L)
+                elapsedTime += 1
+                if (totalDistance > 0 && elapsedTime > 0) {
+                    averageSpeed = totalDistance / (elapsedTime / 3600.0) // km/h
+                }
+            }
+        }
+    }
+
+    // Request location updates if permission granted
+    LaunchedEffect(Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            requestLocationUpdates(context, locationManager, cameraPositionState, coroutineScope) { location ->
+                userLocation = location
+            }
+        } else {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    // Listen for location updates
+    DisposableEffect(Unit) {
+        val locationListener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                val latLng = LatLng(location.latitude, location.longitude)
+                userLocation = latLng
+                if (isRunning) path.add(latLng)
+
+                // Calculate distance
+                previousLocation?.let { prev ->
+                    totalDistance += prev.distanceTo(location) / 1000.0
+                }
+                previousLocation = location
+
+                // Speed in m/s
+                realTimeSpeed = location.speed
+            }
+
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                1000L,
+                0f,
+                locationListener
+            )
+        }
+
+        onDispose {
+            locationManager.removeUpdates(locationListener)
+        }
+    }
+
+    // Styling
+    val backgroundColor = Color(0xFFF2F2F2)
+    val primaryColor = Color(0xFF6200EE)
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = backgroundColor
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp) // Outer padding for entire screen
+        ) {
+            // Map Section
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(400.dp),
+                    .weight(0.45f)
+                    .shadow(4.dp, RoundedCornerShape(16.dp)),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
-                GoogleMap(
-                    modifier = Modifier.fillMaxSize(),
-                    cameraPositionState = cameraPositionState
+                Box {
+                    GoogleMap(
+                        modifier = Modifier.fillMaxSize(),
+                        cameraPositionState = cameraPositionState
+                    ) {
+                        val markerState = remember { MarkerState(position = userLocation ?: LatLng(45.0, 25.0)) }
+
+                        userLocation?.let { location ->
+                            markerState.position = location // Actualizează poziția markerului
+                            Marker(
+                                state = markerState,
+                                title = "Current Location"
+                            )
+                        }
+
+                        if (path.isNotEmpty()) {
+                            Polyline(
+                                points = path.toList(),
+                                color = Color(0xFF29B6F6),
+                                width = 5f
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = Icons.Default.Explore,
+                        contentDescription = "Compass",
+                        tint = Color.Black,
+                        modifier = Modifier
+                            .size(60.dp)
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .rotate(-compassRotation)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Points Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .shadow(4.dp, RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    userLocation?.let { location ->
-                        val markerState = rememberMarkerState(position = location)
-                        Marker(
-                            state = markerState,
-                            title = "Current Location"
+                    Icon(
+                        painter = painterResource(android.R.drawable.ic_menu_info_details),
+                        contentDescription = "Points",
+                        tint = Color(0xFFFFC107),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Points: $currentPoints",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.Black
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Stats Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.25f)
+                    .shadow(4.dp, RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Time Elapsed",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = primaryColor
+                    )
+                    Text(
+                        text = formatElapsedTime(elapsedTime),
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        StatItem(
+                            label = "Dist.",
+                            value = formatDistance(totalDistance),
+                            color = Color(0xFF66BB6A)
+                        )
+
+                        StatItem(
+                            label = "Speed",
+                            value = "${(realTimeSpeed * 3.6).roundToInt()} km/h",
+                            color = Color(0xFFFF7043)
+                        )
+
+                        StatItem(
+                            label = "Avg.",
+                            value = "${averageSpeed.roundToInt()} km/h",
+                            color = Color(0xFF29B6F6)
                         )
                     }
                 }
             }
 
-            // Compasul peste hartă, în colțul din dreapta sus
-            Icon(
-                imageVector = Icons.Default.Explore,
-                contentDescription = "Compass",
-                tint = Color.Black,
-                modifier = Modifier
-                    .size(80.dp)
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .rotate(-compassRotation) // Rotirea iconiței în funcție de orientare
-            )
-        }
+            Spacer(modifier = Modifier.height(4.dp))
 
-        Spacer(modifier = Modifier.height(8.dp)) // Mai puțin spațiu între harta și cardul de detalii
-
-        // Card pentru informațiile despre activitate
-        Card(
-            modifier = Modifier
-                .fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
+            // Buttons
             Column(
                 modifier = Modifier
-                    .padding(16.dp)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .weight(0.2f),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "Time Elapsed",
-                    fontSize = 18.sp,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                Text(
-                    text = formatElapsedTime(elapsedTime),
-                    fontSize = 32.sp,
-                    color = Color.Black
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
+                Button(
+                    onClick = { isRunning = !isRunning },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRunning) Color(0xFFFF5252) else Color(0xFF00C853)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "Distance", style = MaterialTheme.typography.bodyMedium)
-                        Text(text = "${totalDistance.roundToInt()} km", fontSize = 18.sp, color = Color.Black)
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "Calories", style = MaterialTheme.typography.bodyMedium)
-                        Text(text = "382 kcal", fontSize = 18.sp, color = Color.Black)
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "Avg. Speed", style = MaterialTheme.typography.bodyMedium)
-                        Text(text = "12.3 km/h", fontSize = 18.sp, color = Color.Black)
-                    }
+                    Text(
+                        text = if (isRunning) "Stop Running" else "Start Running",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        onEndWorkout()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF9800)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "End Workout",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White
+                    )
                 }
             }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(8.dp)) // Mai puțin spațiu între cardul de detalii și buton
+@Composable
+private fun StatItem(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = color
+        )
+        Text(
+            text = value,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.Black
+        )
+    }
+}
 
-        // Buton de Start / Stop
-        Button(
-            onClick = {
-                isRunning = !isRunning
-                if (!isRunning) {
-                    previousLocation = null // Resetarea locației anterioare la oprire
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp), // Ajustează spațiul din partea de sus
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isRunning) Color(0xFFFF5252) else Color(0xFF00C853)
-            ),
-            shape = RoundedCornerShape(16.dp)
+private fun formatDistance(distance: Double): String {
+    return if (distance < 1) {
+        "${(distance * 1000).roundToInt()} m" // Convertim kilometri în metri
+    } else {
+        String.format("%.2f km", distance) // Afișăm kilometri cu 2 zecimale
+    }
+}
+
+private fun requestLocationUpdates(
+    context: Context,
+    locationManager: LocationManager,
+    cameraPositionState: CameraPositionState,
+    coroutineScope: CoroutineScope,
+    onLocationReceived: (LatLng?) -> Unit
+) {
+    val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+
+    var locationFound = false
+
+    for (provider in providers) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
         ) {
-            Text(
-                text = if (isRunning) "Stop" else "Start",
-                fontSize = 20.sp,
-                color = Color.White
-            )
+            val lastKnownLocation = locationManager.getLastKnownLocation(provider)
+            if (lastKnownLocation != null) {
+                val latLng = LatLng(lastKnownLocation.latitude, lastKnownLocation.longitude)
+                onLocationReceived(latLng)
+                coroutineScope.launch {
+                    cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(latLng, 15f))
+                }
+                locationFound = true
+                break
+            }
         }
     }
 
-}
-
-// Funcție pentru a formata timpul trecut
-private fun formatElapsedTime(seconds: Long): String {
-    val hours = seconds / 3600
-    val minutes = (seconds % 3600) / 60
-    val secs = seconds % 60
-    return String.format("%02d:%02d:%02d", hours, minutes, secs)
-}
-
-// Funcție pentru a obține ultima locație cunoscută
-private fun getLastKnownLocation(
-    locationManager: LocationManager,
-    onLocationReceived: (Location?) -> Unit
-) {
-    val provider = LocationManager.GPS_PROVIDER
-    if (locationManager.isProviderEnabled(provider)) {
-        val location = locationManager.getLastKnownLocation(provider)
-        onLocationReceived(location)
-    } else {
+    if (!locationFound) {
         onLocationReceived(null)
     }
-}
-
-// Funcție pentru a începe actualizările locației
-private fun startLocationUpdates(
-    locationManager: LocationManager,
-    onLocationReceived: (Location?) -> Unit
-) {
-    val locationListener = object : LocationListener {
-        override fun onLocationChanged(location: Location) {
-            onLocationReceived(location)
-        }
-
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-        override fun onProviderEnabled(provider: String) {}
-        override fun onProviderDisabled(provider: String) {}
-    }
-
-    locationManager.requestLocationUpdates(
-        LocationManager.GPS_PROVIDER,
-        1000L, // Request updates every 1 second
-        5f,    // Minimum distance of 5 meters to get updates
-        locationListener
-    )
 }

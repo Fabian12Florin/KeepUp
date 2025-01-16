@@ -1,1 +1,6 @@
 /build
+.idea/kotlinc.xml
+.idea/misc.xml
+app/build.gradle.kts
+build.gradle.kts
+gradle.properties

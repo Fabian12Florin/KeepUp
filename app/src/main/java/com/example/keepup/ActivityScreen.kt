@@ -1,76 +1,137 @@
 package com.example.keepup.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.DirectionsBike
+import androidx.compose.material.icons.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.example.keepup.R // Replace with your actual R import
 
 @Composable
 fun ActivityScreen(navController: NavController) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.SpaceAround,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Color(0xFFF2F2F2) // Light background color
     ) {
-        Text(
-            text = "Choose your Activity",
-            fontSize = 24.sp,
-            style = MaterialTheme.typography.titleLarge
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Butoane pentru activități
-        Button(
-            onClick = { navController.navigate("runningDetails") },
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE)),
-            shape = RoundedCornerShape(8.dp)
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = "Running", fontSize = 20.sp)
+            // Header Section
+            Text(
+                text = "Choose Your Activity",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+                color = Color(0xFF6200EE)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Illustration
+            val configuration = LocalConfiguration.current
+            val screenHeight = configuration.screenHeightDp.dp
+
+            Image(
+                painter = painterResource(id = R.drawable.activity_logo), // Replace with your illustration
+                contentDescription = "Activities Illustration",
+                modifier = Modifier
+                    .height(screenHeight * 0.4f) // 40% of the screen height
+                    .fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Buttons for Activities
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                ActivityButton(
+                    title = "Running",
+                    icon = Icons.Default.DirectionsRun,
+                    backgroundColor = Color(0xFFFF7043),
+                    onClick = { navController.navigate("runningDetails") }
+                )
+
+                ActivityButton(
+                    title = "Cycling",
+                    icon = Icons.Default.DirectionsBike,
+                    backgroundColor = Color(0xFF29B6F6),
+                    onClick = { navController.navigate("cyclingDetails") }
+                )
+
+                ActivityButton(
+                    title = "Walking",
+                    icon = Icons.Default.DirectionsWalk,
+                    backgroundColor = Color(0xFF66BB6A),
+                    onClick = { navController.navigate("walkingDetails") }
+                )
+
+                ActivityButton(
+                    title = "Yoga",
+                    icon = Icons.Default.SelfImprovement,
+                    backgroundColor = Color(0xFFAB47BC),
+                    onClick = { navController.navigate("yogaDetails") }
+                )
+            }
         }
+    }
+}
 
-        Button(
-            onClick = { navController.navigate("cyclingDetails") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE)),
-            shape = RoundedCornerShape(8.dp)
+@Composable
+fun ActivityButton(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    backgroundColor: Color,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(60.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = backgroundColor),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize()
         ) {
-            Text(text = "Cycling", fontSize = 20.sp)
-        }
+            Icon(
+                icon,
+                contentDescription = "$title Icon",
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
+            )
 
-        Button(
-            onClick = { navController.navigate("walkingDetails") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE)),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Text(text = "Walking", fontSize = 20.sp)
-        }
+            Spacer(modifier = Modifier.width(12.dp))
 
-        Button(
-            onClick = { navController.navigate("yogaDetails") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE)),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Text(text = "Yoga", fontSize = 20.sp)
+            Text(
+                text = title,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White
+            )
         }
     }
 }
